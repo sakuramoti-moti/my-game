@@ -1,0 +1,332 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>猫のアクションゲーム - 完全版</title>
+    <style>
+        /* 画面全体のスタイル設定 */
+        body { margin: 0; overflow: hidden; background: #87CEEB; font-family: 'Hiragino Kaku Gothic ProN', sans-serif; transition: background 1s; }
+        canvas { display: block; }
+        /* スコアやステージ情報の表示位置 */
+        #ui { position: absolute; top: 20px; left: 20px; color: #333; font-size: 24px; font-weight: bold; text-shadow: 2px 2px white; pointer-events: none; line-height: 1.4; z-index: 20; }
+        #best { color: #FF4500; font-size: 20px; }
+        /* クリアメッセージのスタイル */
+        #msg { position: absolute; top: 40%; left: 50%; transform: translate(-50%, -50%); color: #FF4500; font-size: 80px; font-weight: bold; display: none; text-shadow: 4px 4px white; text-align: center; z-index: 10; width: 100%; }
+        #stage-info { position: absolute; top: 20px; right: 20px; font-size: 30px; font-weight: bold; color: white; text-shadow: 2px 2px black; }
+    </style>
+</head>
+<body>
+    <div id="ui">
+        <div>小判: <span id="coinCount">0</span> 枚</div>
+        <div>撃破: <span id="enemyCount">0</span> 匹</div>
+        <div>スコア: <span id="totalScore">0</span></div>
+        <div id="best">自己ベスト: <span id="highScore">0</span></div>
+    </div>
+    <div id="stage-info">Stage <span id="currentLevel">1</span></div>
+    <div id="msg">STAGE CLEAR!!</div>
+    <canvas id="gameCanvas"></canvas>
+
+    <script>
+        // --- 1. 基本設定と変数の準備 ---
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        const coinElement = document.getElementById('coinCount');
+        const enemyElement = document.getElementById('enemyCount');
+        const scoreElement = document.getElementById('totalScore');
+        const highElement = document.getElementById('highScore');
+        const levelElement = document.getElementById('currentLevel');
+        const msgElement = document.getElementById('msg');
+
+        canvas.width = window.innerWidth;
+        canvas.height = window.innerHeight;
+
+        const gravity = 0.8;    // 猫にかかる重力
+        const blockSize = 60;   // 1マスの大きさ
+        let coins = 0, defeated = 0, score = 0, combo = 0, currentStage = 0;
+        let highScore = localStorage.getItem('catGame_highScore') || 0;
+        highElement.innerText = highScore;
+
+        let scrollX = 0, frame = 0, isCleared = false;
+        let particles = [], scorePopups = [], enemies = [];
+
+        // 猫（プレイヤー）のデータ
+        const player = {
+            x: 100, y: 100, width: 50, height: 40,
+            vx: 0, vy: 0, speed: 6, jumpPower: -16,
+            grounded: false, direction: 1
+        };
+
+        // --- 2. ステージマップデータ (0:空, 1:地面, 2:トゲ, 3:小判, 4:ゴール) ---
+        const stageMaps = [
+            // Stage 1: 草原（敵を終盤に追加）
+            [
+                [0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,3,0,0,0,0,0,0,0,0,0,1,1,1,1,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,1,1,1,0,0,0,3,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,0,0],
+                [1,1,1,0,0,0,0,0,1,1,1,1,1,2,2,1,1,0,0,0,0,0,1,1,1,1,1,1,1,1,1,1,1,1,1,4]
+            ],
+            // Stage 2: 夜の森
+            [
+                [0,0,3,3,3,0,0,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,0,0,0,0,3,0,0,0,0,1,1,1,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,0,1,1,1,1,1,1,0,0,0,0,0,0,1,1,1,1,0,0,0,0,0,0,0,0,0,3,3,0,0,1,1],
+                [0,3,0,0,0,0,0,0,0,0,0,0,0,3,3,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,0,0,4],
+                [1,1,1,0,0,2,2,2,0,0,1,1,1,1,1,1,0,0,2,2,0,0,1,1,1,0,0,0,0,0,0,0,0,0,1,1]
+            ],
+            // Stage 3: 火山（足場調整済み）
+            [
+                [0,0,0,0,3,0,0,0,3,0,0,0,3,0,0,0,3,0,0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0],
+                [0,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,1,0,0,0,0,0,0,0,0,0,0,3,3,3,0,0,0],
+                [0,0,3,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,3,3,3,0,0,0,0,0,1,1,1,0,0,0],
+                [0,1,1,1,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,0,1,1,1,1,1,3,3,0,0,0,0,0,0,4,0],
+                [1,1,1,1,0,2,2,2,2,0,1,1,1,0,2,2,2,2,0,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1,1]
+            ]
+        ];
+
+        let level = [];
+
+        // --- 3. ステージ初期化（リセット）関数 ---
+        function initStage(stgIndex) {
+            currentStage = stgIndex;
+            level = JSON.parse(JSON.stringify(stageMaps[currentStage]));
+            player.x = 100; player.y = 100; player.vx = 0; player.vy = 0;
+            isCleared = false;
+            msgElement.style.display = 'none';
+            levelElement.innerText = currentStage + 1;
+            scrollX = 0;
+            
+            enemies = [];
+            const startY = canvas.height - (level.length * blockSize);
+            const spawnEnemy = (gx, gy, vx) => {
+                enemies.push({ x: gx * blockSize, y: startY + gy * blockSize - 32, vx: vx, width: 40, height: 30, alive: true });
+            };
+
+            // 敵の配置
+            if(currentStage === 0) {
+                spawnEnemy(10, 4, -2);
+                spawnEnemy(22, 4, -2); // ステージ1追加分
+                spawnEnemy(28, 4, -3); // ステージ1追加分
+            } else if(currentStage === 1) {
+                spawnEnemy(8, 2, -3); spawnEnemy(20, 2, -3);
+            } else {
+                spawnEnemy(10, 4, -4); spawnEnemy(22, 3, -5);
+            }
+        }
+
+        initStage(0);
+
+        // キー入力の状態を記録
+        const keys = {};
+        window.addEventListener('keydown', e => keys[e.code] = true);
+        window.addEventListener('keyup', e => keys[e.code] = false);
+
+        // --- 4. メインロジック（更新）処理 ---
+        function update() {
+            frame++;
+            if (!isCleared) {
+                // 左右移動
+                if (keys['ArrowRight'] || keys['KeyD']) { player.vx = player.speed; player.direction = 1; }
+                else if (keys['ArrowLeft'] || keys['KeyA']) { player.vx = -player.speed; player.direction = -1; }
+                else player.vx = 0;
+                // ジャンプ
+                if ((keys['Space'] || keys['ArrowUp'] || keys['KeyW']) && player.grounded) {
+                    player.vy = player.jumpPower;
+                    player.grounded = false;
+                }
+            } else {
+                // クリア後の自動移動
+                player.vx = 3; player.direction = 1;
+                if (player.grounded && frame % 60 === 0) player.vy = -10;
+            }
+
+            // 物理演算（重力と移動）
+            player.vy += gravity;
+            player.x += player.vx;
+            player.y += player.vy;
+
+            const startY = canvas.height - (level.length * blockSize);
+            scrollX = player.x - 200; // カメラ追従
+            let onGroundThisFrame = false;
+
+            // ゴール判定 (鳥居ラインを越えたらクリア)
+            const goalGridX = level[0].findIndex((col, cIdx) => level.some(row => row[cIdx] === 4));
+            const goalX = goalGridX * blockSize;
+
+            if (!isCleared && player.x > goalX) {
+                isCleared = true;
+                player.vy = -15;
+                msgElement.style.display = 'block';
+                if (score > highScore) {
+                    highScore = score; localStorage.setItem('catGame_highScore', score);
+                    highElement.innerText = highScore;
+                }
+                setTimeout(() => {
+                    if (currentStage + 1 < stageMaps.length) { initStage(currentStage + 1); }
+                    else {
+                        msgElement.innerHTML = "ALL STAGES CLEAR!<br>THANK YOU!";
+                        setTimeout(() => { location.reload(); }, 5000);
+                    }
+                }, 3000);
+            }
+
+            // 地形との当たり判定
+            level.forEach((row, rowIndex) => {
+                row.forEach((cell, colIndex) => {
+                    if (cell === 0) return;
+                    const bx = colIndex * blockSize, by = startY + rowIndex * blockSize;
+                    if (player.x < bx + blockSize && player.x + player.width > bx &&
+                        player.y < by + blockSize && player.y + player.height > by) {
+                        if (cell === 1) { // 地面
+                            if (player.vy > 0 && player.y + player.height - player.vy <= by) {
+                                player.y = by - player.height; player.vy = 0; onGroundThisFrame = true;
+                                if (!isCleared) combo = 0;
+                            }
+                        } else if (cell === 2 && !isCleared) { 
+                            // トゲに当たったら即リセット
+                            return forceReset(); 
+                        } else if (cell === 3) { // 小判
+                            level[rowIndex][colIndex] = 0; coins++; coinElement.innerText = coins;
+                            score += 10; scoreElement.innerText = score;
+                            createParticles(bx + blockSize/2, by + blockSize/2);
+                        }
+                    }
+                });
+            });
+            player.grounded = onGroundThisFrame;
+
+            // 敵の挙動と判定（エラーガード付き）
+            if (enemies && !isCleared) {
+                enemies.forEach(en => {
+                    if (!en || !en.alive) return;
+                    const footX = en.vx > 0 ? en.x + en.width : en.x;
+                    const footY = en.y + en.height + 5;
+                    if (!isGround(footX, footY)) en.vx *= -1; // 崖で反転
+                    en.x += en.vx;
+
+                    if (player.x < en.x + en.width && player.x + player.width > en.x &&
+                        player.y < en.y + en.height && player.y + player.height > en.y) {
+                        if (player.vy > 0 && player.y + player.height < en.y + 20) {
+                            // 敵を踏んだ！
+                            en.alive = false; player.vy = -12; defeated++; enemyElement.innerText = defeated;
+                            combo++; const cb = 50 * combo; score += cb; scoreElement.innerText = score;
+                            createParticles(en.x + en.width/2, en.y, 'gray');
+                            createScorePopup(en.x, en.y, `+${cb}`, combo > 1 ? "orange" : "red");
+                        } else {
+                            // 敵にぶつかった！
+                            forceReset();
+                        }
+                    }
+                });
+            }
+
+            // 演出の更新
+            particles = particles.filter(p => { p.x += p.vx; p.y += p.vy; p.life -= 0.02; return p.life > 0; });
+            scorePopups = scorePopups.filter(p => { p.y -= 1; p.life -= 0.02; return p.life > 0; });
+            
+            // 落下判定
+            if (player.y > canvas.height + 100 && !isCleared) forceReset();
+        }
+
+        // 固まり防止のための安全なリセット関数
+        function forceReset() {
+            player.vx = 0; player.vy = 0;
+            // 判定の無限ループを防ぐため、少しだけ時間を置いてからリセット
+            setTimeout(() => initStage(currentStage), 10);
+        }
+
+        // --- 5. 描画（レンダリング）処理 ---
+        function draw() {
+            // ステージごとの背景色
+            const bgs = ["linear-gradient(#87CEEB, #E0F6FF)", "linear-gradient(#1a1a2e, #16213e)", "linear-gradient(#4a0000, #000000)"];
+            document.body.style.background = bgs[currentStage];
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+            
+            ctx.save(); ctx.translate(-scrollX, 0); // カメラの位置をずらす
+            const startY = canvas.height - (level.length * blockSize);
+            
+            // 地形（ブロック）の描画
+            level.forEach((row, rowIndex) => {
+                row.forEach((cell, colIndex) => {
+                    const bx = colIndex * blockSize, by = startY + rowIndex * blockSize;
+                    if (cell === 1) { // 地面
+                        ctx.fillStyle = ["#7AC143", "#2d5a27", "#333"][currentStage];
+                        ctx.fillRect(bx, by, blockSize, blockSize);
+                        ctx.fillStyle = ["#8B4513", "#4b2c20", "#f00"][currentStage];
+                        ctx.fillRect(bx, by + 10, blockSize, blockSize - 10);
+                    } else if (cell === 2) { // トゲ
+                        ctx.fillStyle = currentStage === 2 ? '#ff4500' : '#555';
+                        ctx.beginPath(); ctx.moveTo(bx, by + blockSize); ctx.lineTo(bx + blockSize/2, by); ctx.lineTo(bx + blockSize, by + blockSize); ctx.fill();
+                    } else if (cell === 3) { // 小判
+                        ctx.fillStyle = 'gold'; ctx.beginPath(); ctx.ellipse(bx + blockSize/2, by + blockSize/2 + Math.sin(frame*0.1)*5, 12, 18, 0, 0, Math.PI*2); ctx.fill();
+                    } else if (cell === 4) { // 鳥居
+                        ctx.fillStyle = 'red'; ctx.fillRect(bx - 20, by - 120, 10, 180); ctx.fillRect(bx + 70, by - 120, 10, 180); ctx.fillRect(bx - 30, by - 120, 120, 20);
+                        ctx.font = "80px serif"; ctx.fillText("⛩️", bx - 10, by + blockSize - 10);
+                    }
+                });
+            });
+
+            // ゴール後の無限地面（描画のみ）
+            const endX = level[0].length * blockSize;
+            if (scrollX + canvas.width > endX) {
+                for (let x = endX; x < scrollX + canvas.width + blockSize; x += blockSize) {
+                    ctx.fillStyle = ["#7AC143", "#2d5a27", "#333"][currentStage];
+                    ctx.fillRect(x, startY + (level.length - 1) * blockSize, blockSize, blockSize);
+                }
+            }
+
+            // 敵（ネズミ）の描画
+            enemies.forEach(en => { if (en.alive) { 
+                ctx.fillStyle = '#888'; ctx.beginPath(); ctx.ellipse(en.x + 20, en.y + 20, 15, 10, 0, 0, Math.PI*2); ctx.fill();
+                ctx.fillStyle = 'pink'; ctx.beginPath(); ctx.arc(en.x + 30, en.y + 15, 5, 0, Math.PI*2); ctx.fill();
+            }});
+
+            // プレイヤー（猫）の描画
+            ctx.save(); ctx.translate(player.x + player.width/2, player.y + player.height/2);
+            if (player.direction === -1) ctx.scale(-1, 1);
+            const walk = Math.sin(frame * 0.2) * 5;
+            // しっぽ
+            ctx.strokeStyle = '#FFD700'; ctx.lineWidth = 8; ctx.beginPath(); ctx.moveTo(-20, 10); ctx.quadraticCurveTo(-40, -10, -35, -20); ctx.stroke();
+            // 体
+            ctx.fillStyle = '#FFFACD'; ctx.beginPath(); ctx.ellipse(0, walk/2, 25, 20, 0, 0, Math.PI * 2); ctx.fill();
+            // 耳
+            ctx.fillStyle = '#FFD700'; ctx.beginPath(); ctx.moveTo(-15, -15); ctx.lineTo(-25, -35); ctx.lineTo(-5, -20); ctx.fill();
+            ctx.beginPath(); ctx.moveTo(15, -15); ctx.lineTo(25, -35); ctx.lineTo(5, -20); ctx.fill();
+            // 目（ぱっちり両目！）
+            ctx.fillStyle = '#333';
+            ctx.beginPath(); ctx.arc(-10, -5, 3, 0, Math.PI*2); ctx.fill(); // 左目
+            ctx.beginPath(); ctx.arc(10, -5, 3, 0, Math.PI*2); ctx.fill();  // 右目
+            ctx.restore();
+
+            // エフェクト（キラキラ・スコア表示）の描画
+            particles.forEach(p => { ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.fillRect(p.x, p.y, 4, 4); });
+            scorePopups.forEach(p => { ctx.globalAlpha = p.life; ctx.fillStyle = p.color; ctx.font = "bold 24px Arial"; ctx.fillText(p.val, p.x, p.y); });
+            
+            ctx.restore();
+            requestAnimationFrame(gameLoop); // 次のフレームを描画
+        }
+
+        // --- 補助関数 ---
+        function isGround(x, y) {
+            const startY = canvas.height - (level.length * blockSize);
+            const gridX = Math.floor(x / blockSize);
+            const gridY = Math.floor((y - startY) / blockSize);
+            return level[gridY] && level[gridY][gridX] === 1;
+        }
+
+        function createParticles(x, y, color) {
+            for (let i = 0; i < 10; i++) {
+                particles.push({ x: x, y: y, vx: (Math.random() - 0.5) * 8, vy: (Math.random() - 0.5) * 8, life: 1.0, color: color || 'gold' });
+            }
+        }
+
+        function createScorePopup(x, y, val, color = "red") {
+            scorePopups.push({ x: x, y: y, val: val, life: 1.0, color: color });
+        }
+
+        // ゲーム開始！
+        function gameLoop() { update(); draw(); }
+        gameLoop();
+    </script>
+</body>
+</html>
