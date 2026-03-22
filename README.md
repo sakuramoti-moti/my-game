@@ -30,4 +30,4 @@
 - **Web Audio API**: レトロなBGMと効果音
 
 ## 🚀 公開URL
-(ここにGitHub Pagesで発行されたURLを貼る)
+https://sakuramoti-moti.github.io/my-game/
